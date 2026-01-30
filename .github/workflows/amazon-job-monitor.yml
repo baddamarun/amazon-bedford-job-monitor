@@ -8,14 +8,16 @@ on:
 jobs:
   monitor:
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
+      issues: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch Amazon jobs API (UK)
+      - name: Fetch Amazon jobs API (Bedford radius 50)
         run: |
           curl -sL "https://www.amazon.jobs/en/search.json?base_query=&loc_query=Bedford%2C+England%2C+United+Kingdom&radius=50" \
             -H "User-Agent: Mozilla/5.0" \
@@ -38,12 +40,49 @@ jobs:
         run: |
           mv jobs.json last_jobs.json
 
-      - name: Commit when new jobs appear
+      - name: Commit snapshot when changed
         if: steps.diff.outputs.changed == 'true'
         run: |
           git config user.name "Job Monitor Bot"
           git config user.email "actions@users.noreply.github.com"
           git add last_jobs.json
-          git commit -m "New or updated Amazon Bedford jobs detected" || exit 0
+          git commit -m "Update Bedford jobs snapshot" || exit 0
           git push
 
+      - name: Build alert message (top jobs)
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          sudo apt-get update -y >/dev/null
+          sudo apt-get install -y jq >/dev/null
+
+          # Handle different possible JSON shapes: .jobs OR .hits OR .results
+          jq -r '
+            def arr: (.jobs // .hits // .results // []);
+            def pickTitle: (.title // .job_title // .name // "Untitled");
+            def pickLoc: (.location // .primary_location // .city // "Location N/A");
+            def pickUrl: (.url_next_step // .url // .job_path // "");
+            def mkLink(u): if (u|tostring|length) > 0 then
+                            if (u|startswith("http")) then u else ("https://www.amazon.jobs" + u) end
+                           else "" end;
+
+            arr as $a
+            | ("Total jobs in feed: " + ($a|length|tostring)),
+              "",
+              "Top 10 jobs:",
+              (
+                $a[0:10]
+                | to_entries[]
+                | ("- " + (.value|pickTitle) + " — " + (.value|pickLoc)
+                   + ( (mkLink(.value|pickUrl)) as $u | if ($u|length)>0 then (" (" + $u + ")") else "" end )
+                  )
+              )
+          ' last_jobs.json > alert_body.txt
+
+      - name: Create GitHub Issue (email alert with details)
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="🟢 Amazon Bedford Jobs Updated - $(date -u +'%Y-%m-%d %H:%M UTC')"
+          BODY="$(cat alert_body.txt)"
+          gh issue create --title "$TITLE" --body "$BODY" --label "job-alert" || true
