@@ -1,4 +1,4 @@
-name: Amazon Bedford Job Monitor
+name: Amazon Bedford Job Monitor (Backend)
 
 on:
   schedule:
@@ -8,7 +8,6 @@ on:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-
     permissions:
       contents: write
 
@@ -16,17 +15,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch Amazon jobs page
+      - name: Fetch Amazon jobs API (UK)
         run: |
-          curl -sL "https://www.jobsatamazon.co.uk/app#/jobSearch" \
+          curl -sL "https://www.amazon.jobs/en/search.json?base_query=&loc_query=Bedford%2C+England%2C+United+Kingdom&radius=50" \
             -H "User-Agent: Mozilla/5.0" \
-            -o page.html
+            -o jobs.json
 
-      - name: Compare with previous version
+      - name: Compare job results
         id: diff
         run: |
-          if [ -f last_page.html ]; then
-            if cmp -s page.html last_page.html; then
+          if [ -f last_jobs.json ]; then
+            if cmp -s jobs.json last_jobs.json; then
               echo "changed=false" >> $GITHUB_OUTPUT
             else
               echo "changed=true" >> $GITHUB_OUTPUT
@@ -35,15 +34,16 @@ jobs:
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Save latest snapshot
+      - name: Save latest jobs snapshot
         run: |
-          mv page.html last_page.html
+          mv jobs.json last_jobs.json
 
-      - name: Commit changes if detected
+      - name: Commit when new jobs appear
         if: steps.diff.outputs.changed == 'true'
         run: |
           git config user.name "Job Monitor Bot"
           git config user.email "actions@users.noreply.github.com"
-          git add last_page.html
-          git commit -m "Amazon jobs page changed" || exit 0
+          git add last_jobs.json
+          git commit -m "New or updated Amazon Bedford jobs detected" || exit 0
           git push
+
